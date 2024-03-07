@@ -2,10 +2,9 @@
   "name": "baseline-dynamodb",
   "version": "1.0.0",
   "description": "DynamoDB library for simple and optimized way to use AWS DynamoDB",
-  "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "build": "npx tsc"
+    "build": "tsup"
   },
   "repository": {
     "type": "git",
@@ -25,9 +24,16 @@
   "homepage": "https://github.com/Baseline-JS/baseline-dynamodb#readme",
   "devDependencies": {
     "@types/node": "^20.11.24",
+    "tsup": "^8.0.2",
     "typescript": "^5.3.3"
   },
   "dependencies": {
     "aws-sdk": "^2.1571.0"
-  }
+  },
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ]
 }
