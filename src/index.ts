@@ -1,43 +1,45 @@
-import * as AWS from "aws-sdk";
 import {
-  DocumentClient,
-  GetItemInput,
-  Key,
-  PutItemInputAttributeMap,
-  ScanInput,
-} from "aws-sdk/clients/dynamodb";
-import * as https from "https";
+  DynamoDBDocument,
+  GetCommandInput,
+  QueryCommandInput,
+  ScanCommandInput,
+  UpdateCommandInput,
+  BatchGetCommandInput,
+} from "@aws-sdk/lib-dynamodb";
+import {
+  DynamoDB,
+  PutItemCommandInput,
+  UpdateItemCommandInput,
+} from "@aws-sdk/client-dynamodb";
 
 const IS_OFFLINE = process.env.IS_OFFLINE; // Set by serverless-offline https://github.com/dherault/serverless-offline
 
-export let dynamoDb: AWS.DynamoDB.DocumentClient | undefined = undefined;
+export let dynamoDb: DynamoDBDocument | undefined = undefined;
 
-function newDynamodbConnection(): DocumentClient {
+type Key = Record<string, any>;
+
+function newDynamodbConnection(): DynamoDBDocument {
   console.log("DynamoDB Init");
 
-  const agent = new https.Agent({
-    keepAlive: true,
-    maxSockets: Infinity, // Infinity is read as 50 sockets
-  });
-  let newConnection: AWS.DynamoDB.DocumentClient;
+  let newConnection: DynamoDBDocument;
   if (IS_OFFLINE === "true") {
-    newConnection = new AWS.DynamoDB.DocumentClient({
-      region: "localhost",
-      endpoint: "http://localhost:8000",
-    });
+    newConnection = DynamoDBDocument.from(
+      new DynamoDB({
+        region: "localhost",
+        endpoint: "http://localhost:8000",
+      })
+    );
   } else {
-    newConnection = new AWS.DynamoDB.DocumentClient({
-      httpOptions: {
-        agent,
-      },
-      paramValidation: false,
-      convertResponseTypes: false,
-    });
+    newConnection = DynamoDBDocument.from(
+      new DynamoDB({
+        region: process.env.API_REGION,
+      })
+    );
   }
   return newConnection;
 }
 
-export const getDynamodbConnection = (): DocumentClient => {
+export const getDynamodbConnection = (): DynamoDBDocument => {
   if (typeof dynamoDb === "undefined") {
     dynamoDb = newDynamodbConnection();
   }
@@ -45,21 +47,18 @@ export const getDynamodbConnection = (): DocumentClient => {
 };
 
 interface getParams {
-  dynamoDb: DocumentClient;
+  dynamoDb: DynamoDBDocument;
   table: string;
   key: Key;
 }
 
 export const get = async <T>(getParams: getParams): Promise<T> => {
   try {
-    const params: GetItemInput = {
+    const params: GetCommandInput = {
       TableName: getParams.table || "",
       Key: getParams.key,
     };
-    const result = await getParams.dynamoDb.get(params).promise();
-    if (result?.$response?.error) {
-      throw new Error(result?.$response?.error.message);
-    }
+    const result = await getParams.dynamoDb.get(params);
     return result.Item as T;
   } catch (error) {
     const message = getErrorMessage(error);
@@ -69,19 +68,19 @@ export const get = async <T>(getParams: getParams): Promise<T> => {
 };
 
 interface getAllParams {
-  dynamoDb: DocumentClient;
+  dynamoDb: DynamoDBDocument;
   table: string;
 }
 
 export const getAll = async <T>(params: getAllParams): Promise<T[]> => {
   try {
-    const scanInputArgs: ScanInput = {
+    const scanInputArgs: ScanCommandInput = {
       TableName: params.table || "",
     };
     const allRecords: T[] = [];
-    let lastKey: AWS.DynamoDB.DocumentClient.Key | undefined = undefined;
+    let lastKey: Key | undefined = undefined;
     do {
-      const result = await params.dynamoDb.scan(scanInputArgs).promise();
+      const result = await params.dynamoDb.scan(scanInputArgs);
       const resultRecords = result.Items as T[];
       allRecords.push(...resultRecords);
       lastKey = result.LastEvaluatedKey;
@@ -149,23 +148,23 @@ export type OperatorType =
 export interface ConditionExpressionArgs {
   operator: OperatorType;
   field: string;
-  value?: string | number;
+  value?: string;
   /** Used for Between comparison */
   betweenSecondValue?: string;
 }
 
 interface UpdateParams<T> {
-  dynamoDb: DocumentClient;
+  dynamoDb: DynamoDBDocument;
   table: string;
   key: Key;
-  fields: Partial<Record<keyof T, unknown>>;
+  fields: Partial<Record<keyof T, any>>;
   updateConditions?: ConditionExpressionArgs[];
 }
 
 export interface UpdateItem {
   name: string;
   attributeName: string;
-  attributeValue: unknown;
+  attributeValue: any;
   ref: string;
 }
 
@@ -177,19 +176,23 @@ export const update = async <T>(params: UpdateParams<T>): Promise<T> => {
   );
   try {
     const updateItems: UpdateItem[] = [];
-    Object.keys(params.fields).forEach((element: string, index: number) => {
-        if (
-            typeof params.fields[element as keyof T] !== undefined &&
-            params.fields[element as keyof T] !== undefined
-        ) {
-            updateItems.push({
-                name: element,
-                attributeName: `#attr${index}`,
-                attributeValue: params.fields[element as keyof T],
-                ref: `:attr${index}`,
-            });
-        }
-    });
+    let index = 0;
+    for (const element in params.fields) {
+      const attributeValue = params.fields[element];
+      if (
+        typeof params.fields[element] !== undefined &&
+        params.fields[element] !== undefined
+      ) {
+        updateItems.push({
+          name: element,
+          attributeName: `#attr${index}`,
+          attributeValue,
+          ref: `:attr${index}`,
+        });
+      }
+
+      index = index + 1;
+    }
 
     // This may not be the best way to handle this
     if (!updateItems.length) {
@@ -207,14 +210,14 @@ export const update = async <T>(params: UpdateParams<T>): Promise<T> => {
     const expressionAttributeValues = updateItems.reduce((p, c: UpdateItem) => {
       p[`${c.ref}`] = c.attributeValue;
       return p;
-    }, {} as { [key: string]: unknown });
+    }, {} as Record<string, any>);
 
     const expressionAttributeNames = updateItems.reduce((p, c: UpdateItem) => {
       p[`${c.attributeName}`] = c.name;
       return p;
-    }, {} as DocumentClient.ExpressionAttributeNameMap);
+    }, {} as Record<string, string>);
 
-    const updateItemInput: DocumentClient.UpdateItemInput = {
+    const updateItemInput: UpdateCommandInput = {
       TableName: params.table || "",
       Key: params.key,
       UpdateExpression: updateExpression,
@@ -250,7 +253,7 @@ export const update = async <T>(params: UpdateParams<T>): Promise<T> => {
       });
     }
 
-    const result = await params.dynamoDb.update(updateItemInput).promise();
+    const result = await params.dynamoDb.update(updateItemInput);
     return result.Attributes as T;
   } catch (error) {
     const message = getErrorMessage(error);
@@ -259,21 +262,21 @@ export const update = async <T>(params: UpdateParams<T>): Promise<T> => {
   }
 };
 
-interface queryByKeyAndFilterParams {
-  dynamoDb: DocumentClient;
+interface QueryByKeyAndFilterParams {
+  dynamoDb: DynamoDBDocument;
   table: string;
   keyName: string;
-  keyValue: unknown;
+  keyValue: any;
   indexName?: string;
   filterKeyName: string;
-  filterKeyValue: unknown;
+  filterKeyValue: any;
 }
 
 export const queryByKeyAndFilter = async <T>(
-  params: queryByKeyAndFilterParams
+  params: QueryByKeyAndFilterParams
 ): Promise<T[]> => {
   try {
-    const queryParams: DocumentClient.QueryInput = {
+    const queryParams: QueryCommandInput = {
       TableName: params.table,
       KeyConditionExpression: `#a = :b`,
       FilterExpression: `#c = :d`,
@@ -291,9 +294,9 @@ export const queryByKeyAndFilter = async <T>(
     }
 
     const allRecords: T[] = [];
-    let lastKey: AWS.DynamoDB.DocumentClient.Key | undefined = undefined;
+    let lastKey: Key | undefined = undefined;
     do {
-      const result = await params.dynamoDb.query(queryParams).promise();
+      const result = await params.dynamoDb.query(queryParams);
       const resultRecords = result.Items as T[];
       allRecords.push(...resultRecords);
       lastKey = result.LastEvaluatedKey;
@@ -308,8 +311,8 @@ export const queryByKeyAndFilter = async <T>(
   }
 };
 
-interface queryByKeyAndFilterBetweenParams {
-  dynamoDb: DocumentClient;
+interface QueryByKeyAndFilterBetweenParams {
+  dynamoDb: DynamoDBDocument;
   table: string;
   keyName: string;
   keyValue: unknown;
@@ -320,10 +323,10 @@ interface queryByKeyAndFilterBetweenParams {
 }
 
 export const queryByKeyAndFilterBetween = async <T>(
-  params: queryByKeyAndFilterBetweenParams
+  params: QueryByKeyAndFilterBetweenParams
 ): Promise<T[]> => {
   try {
-    const queryParams: DocumentClient.QueryInput = {
+    const queryParams: QueryCommandInput = {
       TableName: params.table,
       KeyConditionExpression: `#a = :b And #c BETWEEN :d AND :e`,
       ExpressionAttributeNames: {
@@ -342,9 +345,9 @@ export const queryByKeyAndFilterBetween = async <T>(
     }
 
     const allRecords: T[] = [];
-    let lastKey: AWS.DynamoDB.DocumentClient.Key | undefined = undefined;
+    let lastKey: Key | undefined = undefined;
     do {
-      const result = await params.dynamoDb.query(queryParams).promise();
+      const result = await params.dynamoDb.query(queryParams);
       const resultRecords = result.Items as T[];
       allRecords.push(...resultRecords);
       lastKey = result.LastEvaluatedKey;
@@ -359,17 +362,17 @@ export const queryByKeyAndFilterBetween = async <T>(
   }
 };
 
-interface queryByKeyParams {
-  dynamoDb: DocumentClient;
+interface QueryByKeyParams {
+  dynamoDb: DynamoDBDocument;
   table: string;
   keyName: string;
   keyValue: unknown;
   indexName?: string;
 }
 
-export const queryByKey = async <T>(params: queryByKeyParams): Promise<T[]> => {
+export const queryByKey = async <T>(params: QueryByKeyParams): Promise<T[]> => {
   try {
-    const queryParams: DocumentClient.QueryInput = {
+    const queryParams: QueryCommandInput = {
       TableName: params.table,
       KeyConditionExpression: `#a = :b`,
       ExpressionAttributeNames: {
@@ -384,9 +387,9 @@ export const queryByKey = async <T>(params: queryByKeyParams): Promise<T[]> => {
     }
 
     const allRecords: T[] = [];
-    let lastKey: AWS.DynamoDB.DocumentClient.Key | undefined = undefined;
+    let lastKey: Key | undefined = undefined;
     do {
-      const result = await params.dynamoDb.query(queryParams).promise();
+      const result = await params.dynamoDb.query(queryParams);
       const resultRecords = result.Items as T[];
       allRecords.push(...resultRecords);
       lastKey = result.LastEvaluatedKey;
@@ -401,23 +404,25 @@ export const queryByKey = async <T>(params: queryByKeyParams): Promise<T[]> => {
   }
 };
 
-interface putItemParams<T> {
-  dynamoDb: DocumentClient;
+interface PutItemParams<T extends Record<string, any>> {
+  dynamoDb: DynamoDBDocument;
   table: string;
   item: T;
 }
 
-export const putItem = async <T extends PutItemInputAttributeMap>(params: putItemParams<T>): Promise<T> => {
-  const putItemParams: DocumentClient.PutItemInput = {
+export const putItem = async <T extends Record<string, any>>(
+  params: PutItemParams<T>
+): Promise<T> => {
+  const putItemParams: PutItemCommandInput = {
     TableName: params.table,
     Item: params.item,
   };
-  await params.dynamoDb.put(putItemParams).promise();
+  await params.dynamoDb.put(putItemParams);
   return params.item;
 };
 
 interface BatchGetParams {
-  dynamoDb: DocumentClient;
+  dynamoDb: DynamoDBDocument;
   table: string;
   keyName: string;
   ids: string[];
@@ -446,7 +451,7 @@ export const batchGet = async <T>(params: BatchGetParams): Promise<T[]> => {
     const keys = batch.map((id) => {
       return { [params.keyName]: id };
     });
-    const batchGetParams: DocumentClient.BatchGetItemInput = {
+    const batchGetParams: BatchGetCommandInput = {
       RequestItems: {
         [params.table]: {
           Keys: keys,
@@ -455,7 +460,7 @@ export const batchGet = async <T>(params: BatchGetParams): Promise<T[]> => {
     };
 
     // todo handle multiple pages incase of larger records
-    return params.dynamoDb.batchGet(batchGetParams).promise();
+    return params.dynamoDb.batchGet(batchGetParams);
   });
 
   const results = await Promise.all(promises);
@@ -467,10 +472,10 @@ export const batchGet = async <T>(params: BatchGetParams): Promise<T[]> => {
 };
 
 interface DeleteItemParams {
-  dynamoDb: DocumentClient;
+  dynamoDb: DynamoDBDocument;
   table: string;
   keyName: string;
-  keyValue: string;
+  keyValue: Key;
 }
 
 export const deleteItem = async (params: DeleteItemParams) => {
@@ -478,13 +483,12 @@ export const deleteItem = async (params: DeleteItemParams) => {
     `Delete ${params.table} : ${params.keyName} : [${params.keyValue}]`
   );
   try {
-    const deleteParams: DocumentClient.UpdateItemInput = {
+    const deleteParams: UpdateItemCommandInput = {
       TableName: `${params.table}`,
-      Key: {},
+      Key: params.keyValue,
     };
-    deleteParams.Key[`${params.keyName}`] = `${params.keyValue}`;
 
-    await params.dynamoDb.delete(deleteParams).promise();
+    await params.dynamoDb.delete(deleteParams);
     return true;
   } catch (error) {
     const message = getErrorMessage(error);
