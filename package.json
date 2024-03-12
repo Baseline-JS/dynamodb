@@ -1,6 +1,6 @@
 {
   "name": "baseline-dynamodb",
-  "version": "0.1.02",
+  "version": "0.1.03",
   "author": "BaselineJS",
   "description": "DynamoDB library for simple and optimized way to use AWS DynamoDB",
   "scripts": {
