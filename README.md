@@ -17,7 +17,7 @@ pnpm add baseline-dynamodb
 ```
 import { getAll, getDynamodbConnection, putItem } from "baseline-dynamodb";
 
-const dynamoDb = getDynamodbConnection();
+const dynamoDb = getDynamodbConnection({ region: "us-east-1" });
 
 (async () => {
   const putResult = await putItem({

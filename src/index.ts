@@ -8,7 +8,7 @@ import {
   DeleteCommandInput,
   PutCommandInput,
 } from "@aws-sdk/lib-dynamodb";
-import { DynamoDB } from "@aws-sdk/client-dynamodb";
+import { DynamoDB, DynamoDBClientConfig } from "@aws-sdk/client-dynamodb";
 import { NativeAttributeValue } from "@aws-sdk/util-dynamodb";
 
 const IS_OFFLINE = process.env.IS_OFFLINE; // Set by serverless-offline https://github.com/dherault/serverless-offline
@@ -16,8 +16,9 @@ const IS_OFFLINE = process.env.IS_OFFLINE; // Set by serverless-offline https://
 export let dynamoDb: DynamoDBDocument | undefined = undefined;
 
 type Key = Record<string, NativeAttributeValue>;
+type DynamoClientConfig = DynamoDBClientConfig & { region: string };
 
-function newDynamodbConnection(): DynamoDBDocument {
+function newDynamodbConnection(config: DynamoClientConfig): DynamoDBDocument {
   console.log("DynamoDB Init");
 
   let newConnection: DynamoDBDocument;
@@ -30,17 +31,15 @@ function newDynamodbConnection(): DynamoDBDocument {
     );
   } else {
     newConnection = DynamoDBDocument.from(
-      new DynamoDB({
-        region: process.env.API_REGION,
-      })
+      new DynamoDB(config)
     );
   }
   return newConnection;
 }
 
-export const getDynamodbConnection = (): DynamoDBDocument => {
+export const getDynamodbConnection = (config: DynamoClientConfig): DynamoDBDocument => {
   if (typeof dynamoDb === "undefined") {
-    dynamoDb = newDynamodbConnection();
+    dynamoDb = newDynamodbConnection(config);
   }
   return dynamoDb;
 };
