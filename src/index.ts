@@ -5,12 +5,9 @@ import {
   ScanCommandInput,
   UpdateCommandInput,
   BatchGetCommandInput,
+  DeleteCommandInput,
 } from "@aws-sdk/lib-dynamodb";
-import {
-  DynamoDB,
-  PutItemCommandInput,
-  UpdateItemCommandInput,
-} from "@aws-sdk/client-dynamodb";
+import { DynamoDB, PutItemCommandInput } from "@aws-sdk/client-dynamodb";
 
 const IS_OFFLINE = process.env.IS_OFFLINE; // Set by serverless-offline https://github.com/dherault/serverless-offline
 
@@ -474,18 +471,26 @@ export const batchGet = async <T>(params: BatchGetParams): Promise<T[]> => {
 interface DeleteItemParams {
   dynamoDb: DynamoDBDocument;
   table: string;
-  keyName: string;
-  keyValue: Key;
+  keyName?: string;
+  keyValue?: string;
+  key?: Key;
 }
 
 export const deleteItem = async (params: DeleteItemParams) => {
-  console.log(
-    `Delete ${params.table} : ${params.keyName} : [${params.keyValue}]`
-  );
+  params.key
+    ? console.log(`Delete ${params.table} : ${JSON.stringify(params.key)}`)
+    : console.log(
+        `Delete ${params.table} : ${params.keyName} : [${params.keyValue}]`
+      );
+
   try {
-    const deleteParams: UpdateItemCommandInput = {
+    const deleteParams: DeleteCommandInput = {
       TableName: `${params.table}`,
-      Key: params.keyValue,
+      Key: params.key
+        ? params.key
+        : {
+            [`${params.keyName}`]: params.keyValue,
+          },
     };
 
     await params.dynamoDb.delete(deleteParams);
