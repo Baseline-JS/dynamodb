@@ -6,14 +6,16 @@ import {
   UpdateCommandInput,
   BatchGetCommandInput,
   DeleteCommandInput,
+  PutCommandInput,
 } from "@aws-sdk/lib-dynamodb";
-import { DynamoDB, PutItemCommandInput } from "@aws-sdk/client-dynamodb";
+import { DynamoDB } from "@aws-sdk/client-dynamodb";
+import { NativeAttributeValue } from "@aws-sdk/util-dynamodb";
 
 const IS_OFFLINE = process.env.IS_OFFLINE; // Set by serverless-offline https://github.com/dherault/serverless-offline
 
 export let dynamoDb: DynamoDBDocument | undefined = undefined;
 
-type Key = Record<string, any>;
+type Key = Record<string, NativeAttributeValue>;
 
 function newDynamodbConnection(): DynamoDBDocument {
   console.log("DynamoDB Init");
@@ -43,13 +45,13 @@ export const getDynamodbConnection = (): DynamoDBDocument => {
   return dynamoDb;
 };
 
-interface getParams {
+interface GetParams {
   dynamoDb: DynamoDBDocument;
   table: string;
   key: Key;
 }
 
-export const get = async <T>(getParams: getParams): Promise<T> => {
+export const get = async <T>(getParams: GetParams): Promise<T> => {
   try {
     const params: GetCommandInput = {
       TableName: getParams.table || "",
@@ -64,12 +66,12 @@ export const get = async <T>(getParams: getParams): Promise<T> => {
   }
 };
 
-interface getAllParams {
+interface GetAllParams {
   dynamoDb: DynamoDBDocument;
   table: string;
 }
 
-export const getAll = async <T>(params: getAllParams): Promise<T[]> => {
+export const getAll = async <T>(params: GetAllParams): Promise<T[]> => {
   try {
     const scanInputArgs: ScanCommandInput = {
       TableName: params.table || "",
@@ -145,30 +147,29 @@ export type OperatorType =
 export interface ConditionExpressionArgs {
   operator: OperatorType;
   field: string;
-  value?: string;
+  value?: NativeAttributeValue;
   /** Used for Between comparison */
-  betweenSecondValue?: string;
+  betweenSecondValue?: NativeAttributeValue;
 }
 
 interface UpdateParams<T> {
   dynamoDb: DynamoDBDocument;
   table: string;
   key: Key;
-  fields: Partial<Record<keyof T, any>>;
+  fields: Partial<Record<keyof T, NativeAttributeValue>>;
   updateConditions?: ConditionExpressionArgs[];
 }
 
 export interface UpdateItem {
   name: string;
   attributeName: string;
-  attributeValue: any;
+  attributeValue: NativeAttributeValue;
   ref: string;
 }
 
 export const update = async <T>(params: UpdateParams<T>): Promise<T> => {
   console.log(
-    `Update record [${Object.keys(params.fields).join(", ")}] on table ${
-      params.table
+    `Update record [${Object.keys(params.fields).join(", ")}] on table ${params.table
     }`
   );
   try {
@@ -207,7 +208,7 @@ export const update = async <T>(params: UpdateParams<T>): Promise<T> => {
     const expressionAttributeValues = updateItems.reduce((p, c: UpdateItem) => {
       p[`${c.ref}`] = c.attributeValue;
       return p;
-    }, {} as Record<string, any>);
+    }, {} as Record<string, NativeAttributeValue>);
 
     const expressionAttributeNames = updateItems.reduce((p, c: UpdateItem) => {
       p[`${c.attributeName}`] = c.name;
@@ -263,10 +264,10 @@ interface QueryByKeyAndFilterParams {
   dynamoDb: DynamoDBDocument;
   table: string;
   keyName: string;
-  keyValue: any;
+  keyValue: NativeAttributeValue;
   indexName?: string;
   filterKeyName: string;
-  filterKeyValue: any;
+  filterKeyValue: NativeAttributeValue;
 }
 
 export const queryByKeyAndFilter = async <T>(
@@ -312,11 +313,11 @@ interface QueryByKeyAndFilterBetweenParams {
   dynamoDb: DynamoDBDocument;
   table: string;
   keyName: string;
-  keyValue: unknown;
+  keyValue: NativeAttributeValue;
   indexName?: string;
   filterKeyName: string;
-  filterKeyValueMin: unknown;
-  filterKeyValueMax: unknown;
+  filterKeyValueMin: NativeAttributeValue;
+  filterKeyValueMax: NativeAttributeValue;
 }
 
 export const queryByKeyAndFilterBetween = async <T>(
@@ -363,7 +364,7 @@ interface QueryByKeyParams {
   dynamoDb: DynamoDBDocument;
   table: string;
   keyName: string;
-  keyValue: unknown;
+  keyValue: NativeAttributeValue;
   indexName?: string;
 }
 
@@ -401,16 +402,16 @@ export const queryByKey = async <T>(params: QueryByKeyParams): Promise<T[]> => {
   }
 };
 
-interface PutItemParams<T extends Record<string, any>> {
+interface PutItemParams<T extends Record<string, NativeAttributeValue>> {
   dynamoDb: DynamoDBDocument;
   table: string;
   item: T;
 }
 
-export const putItem = async <T extends Record<string, any>>(
+export const putItem = async <T extends Record<string, NativeAttributeValue>>(
   params: PutItemParams<T>
 ): Promise<T> => {
-  const putItemParams: PutItemCommandInput = {
+  const putItemParams: PutCommandInput = {
     TableName: params.table,
     Item: params.item,
   };
@@ -480,8 +481,8 @@ export const deleteItem = async (params: DeleteItemParams) => {
   params.key
     ? console.log(`Delete ${params.table} : ${JSON.stringify(params.key)}`)
     : console.log(
-        `Delete ${params.table} : ${params.keyName} : [${params.keyValue}]`
-      );
+      `Delete ${params.table} : ${params.keyName} : [${params.keyValue}]`
+    );
 
   try {
     const deleteParams: DeleteCommandInput = {
@@ -489,8 +490,8 @@ export const deleteItem = async (params: DeleteItemParams) => {
       Key: params.key
         ? params.key
         : {
-            [`${params.keyName}`]: params.keyValue,
-          },
+          [`${params.keyName}`]: params.keyValue,
+        },
     };
 
     await params.dynamoDb.delete(deleteParams);
