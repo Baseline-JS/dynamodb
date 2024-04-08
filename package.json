@@ -5,7 +5,9 @@
   "description": "DynamoDB library for simple and optimized way to use AWS DynamoDB",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "build": "tsup"
+    "build": "tsup",
+    "pretty": "npx prettier --write 'src/**/*.{ts,json,md}' && npx prettier --write '*.js'",
+    "pretty:dist": "npx prettier --write 'dist/**/*.ts' --ignore-path=/dev/null"
   },
   "repository": {
     "type": "git",
@@ -36,6 +38,7 @@
   "dependencies": {
     "@aws-sdk/client-dynamodb": "^3.529.1",
     "@aws-sdk/lib-dynamodb": "^3.529.1",
-    "@aws-sdk/util-dynamodb": "^3.529.1"
+    "@aws-sdk/util-dynamodb": "^3.529.1",
+    "prettier": "^3.2.5"
   }
 }
