@@ -69,7 +69,7 @@ const dynamo = newDynamoDBConnection({
 Add a new item to your table, providing the previously created connection.
 
 ```ts
-const user = await createItem<User>({
+const user = await putItem<User>({
   dynamoDb: dynamo,
   table: 'user-table-staging',
   item: { userId: '123', email: 'example@example.com', name: 'Alice' },
@@ -171,7 +171,7 @@ Batch create items into a table.
 Automatically handles splitting the items into chunks of 25.
 
 ```ts
-const users = await batchCreateItems<User>({
+const users = await batchPutItems<User>({
   dynamoDb: dynamo,
   table: 'user-table-staging',
   items: [
@@ -266,13 +266,13 @@ const userPurchases = await queryItems<Purchase>({
 
 ### Create, Update, Delete Conditions
 
-A `conditions` array can be provided to the `createItem`, `updateItem`, and `deleteItem` functions to specify conditions that must be met for the operation to succeed.
+A `conditions` array can be provided to the `putItem`, `updateItem`, and `deleteItem` functions to specify conditions that must be met for the operation to succeed.
 
 Conditions are combined with AND.
 
 ```ts
 try {
-  const user = await createItem<User>({
+  const user = await putItem<User>({
     dynamoDb: dynamo,
     table: 'user-table-staging',
     item: { userId: '123', email: 'example2@example.com', name: 'Alice' },

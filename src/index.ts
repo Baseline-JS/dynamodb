@@ -55,9 +55,7 @@ export function getDynamodbConnection(
   return newConnection;
 }
 
-export interface CreateItemParams<
-  T extends Record<string, NativeAttributeValue>,
-> {
+export interface PutItemParams<T extends Record<string, NativeAttributeValue>> {
   dynamoDb: DynamoDbDocumentClient;
   table: string;
   item: T;
@@ -71,10 +69,8 @@ export interface CreateItemParams<
 /**
  * Create a new item.
  */
-export const createItem = async <
-  T extends Record<string, NativeAttributeValue>,
->(
-  params: CreateItemParams<T>,
+export const putItem = async <T extends Record<string, NativeAttributeValue>>(
+  params: PutItemParams<T>,
 ): Promise<T> => {
   const dynamoDb = params.dynamoDb;
 
@@ -715,9 +711,7 @@ export async function queryItemsRangeBetween<
   return result;
 }
 
-export interface BatchCreateItems<
-  T extends Record<string, NativeAttributeValue>,
-> {
+export interface BatchPutItems<T extends Record<string, NativeAttributeValue>> {
   dynamoDb: DynamoDbDocumentClient;
   table: string;
   /**
@@ -731,10 +725,10 @@ export interface BatchCreateItems<
  * Batch create items into a table.
  * Automatically handles chunking the items by 25.
  */
-export const batchCreateItems = async <
+export const batchPutItems = async <
   T extends Record<string, NativeAttributeValue>,
 >(
-  params: BatchCreateItems<T>,
+  params: BatchPutItems<T>,
 ): Promise<T[]> => {
   const totalBatches = Math.ceil(params.items.length / 25);
   const itemBatches: Record<string, any>[][] = [];
