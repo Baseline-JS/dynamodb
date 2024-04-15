@@ -7,7 +7,7 @@ Baseline DynamoDB is an optimized utility library that simplifies standard Dynam
 - Simplified Item Operations: CRUD with less boilerplate code.
 - Advanced Querying: Easily use sort key conditions, including begins_with and between, to filter queries.
 - Batch Operations: Automatically handles chunking for batch get, batch create, and batch delete operations.
-- Lightweight:
+- Lightweight
 
 ## Table of Contents <!-- omit in toc -->
 
@@ -100,7 +100,7 @@ Update an item in your table.
 Key properties will be automatically removed from fields to prevent attribute errors.
 
 ```ts
-const updatedUser = await dynamoUpdate<User>({
+const updatedUser = await updateItem<User>({
   dynamoDb: dynamo,
   table: 'user-table-staging',
   key: {
