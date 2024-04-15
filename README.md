@@ -29,6 +29,9 @@ Baseline DynamoDB is an optimized utility library that simplifies standard Dynam
   - [Create, Update, Delete Conditions](#create-update-delete-conditions)
   - [Limit](#limit)
   - [Projection Expressions](#projection-expressions)
+- [Utility Functions](#utility-functions)
+  - [Unmarshalling](#unmarshalling)
+  - [Marshalling](#marshalling)
 - [Error Handling](#error-handling)
 - [Environment Variables](#environment-variables)
   - [Serverless Offline](#serverless-offline)
@@ -41,7 +44,7 @@ npm install baseline-dynamodb
 ```
 
 ```sh
-yarn install baseline-dynamodb
+yarn add baseline-dynamodb
 ```
 
 ```sh
@@ -322,6 +325,35 @@ const userPurchases = await queryItems<Purchase, 'userId' | 'createdAt'>({
   keyValue: '123',
   projectionExpression: ['userId', 'createdAt'],
 });
+```
+
+## Utility Functions
+
+### Unmarshalling
+
+Unmarshalling is used to convert a DynamoDB record into a JavaScript object.
+
+This is useful when using dynamodb streams, as the new and old images are returned as DynamoDB records that need to be unmarshalled.
+
+```ts
+import { unmarshallItem } from 'baseline-dynamodb';
+
+const user = unmarshallItem<User>(record.dynamodb?.NewImage);
+```
+
+### Marshalling
+
+Marshalling is used to convert a JavaScript object into a DynamoDB record.
+
+```ts
+import { marshallItem } from 'baseline-dynamodb';
+
+const user = {
+  userId: '123',
+  email: 'example@example.com',
+  name: 'Alice',
+};
+const marshalledUser = marshallItem(user);
 ```
 
 ## Error Handling

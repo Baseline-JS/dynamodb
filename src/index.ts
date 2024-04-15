@@ -1,4 +1,8 @@
-import { DynamoDB, DynamoDBClientConfig } from '@aws-sdk/client-dynamodb';
+import {
+  AttributeValue,
+  DynamoDB,
+  DynamoDBClientConfig,
+} from '@aws-sdk/client-dynamodb';
 import {
   BatchWriteCommandInput,
   BatchGetCommandInput,
@@ -10,7 +14,13 @@ import {
   ScanCommandInput,
   UpdateCommandInput,
 } from '@aws-sdk/lib-dynamodb';
-import { NativeAttributeValue } from '@aws-sdk/util-dynamodb';
+import {
+  NativeAttributeValue,
+  marshall,
+  marshallOptions,
+  unmarshall,
+  unmarshallOptions,
+} from '@aws-sdk/util-dynamodb';
 import {
   sleep,
   buildConditionExpression,
@@ -835,4 +845,26 @@ export const batchDeleteItems = async (
   }
 
   return true;
+};
+
+/**
+ * Unmarshalling is used to convert a DynamoDB record into a JavaScript object.
+ */
+export const unmarshallItem = <T extends Record<string, NativeAttributeValue>>(
+  item: Record<string, AttributeValue>,
+  options?: unmarshallOptions,
+): T => {
+  const unmarshallItem = unmarshall(item, options);
+  return unmarshallItem as T;
+};
+
+/**
+ * Marshalling is used to convert a JavaScript object into a DynamoDB record.
+ */
+export const marshallItem = <T extends Record<string, NativeAttributeValue>>(
+  item: T,
+  options?: marshallOptions,
+): Record<string, AttributeValue> => {
+  const unmarshallItem = marshall(item, options);
+  return unmarshallItem;
 };
