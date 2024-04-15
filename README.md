@@ -62,7 +62,7 @@ Must specify a region.
 Natively handles both local and deployed environments. See [Environment Variables](#environment-variables) for more information.
 
 ```ts
-const dynamo = newDynamoDBConnection({
+const dynamo = getDynamodbConnection({
   region: 'us-east-1',
 });
 ```
