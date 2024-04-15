@@ -26,6 +26,7 @@
   "homepage": "https://github.com/Baseline-JS/baseline-dynamodb#readme",
   "devDependencies": {
     "@types/node": "^20.11.24",
+    "prettier": "^3.2.5",
     "tsup": "^8.0.2",
     "typescript": "^5.3.3"
   },
@@ -38,7 +39,6 @@
   "dependencies": {
     "@aws-sdk/client-dynamodb": "^3.529.1",
     "@aws-sdk/lib-dynamodb": "^3.529.1",
-    "@aws-sdk/util-dynamodb": "^3.529.1",
-    "prettier": "^3.2.5"
+    "@aws-sdk/util-dynamodb": "^3.529.1"
   }
 }
