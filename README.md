@@ -382,4 +382,4 @@ Using the following in a local project you can test.
 
 `pnpm link <path-to-local-npm-package>`
 
-Might need to run `npm run build` in baseline-dynamodb root dir first.
+Might need to run `npm run build` in this root directory first.

@@ -11,7 +11,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Baseline-JS/baseline-dynamodb.git"
+    "url": "git+https://github.com/Baseline-JS/dynamodb.git"
   },
   "keywords": [
     "DynamoDB",
@@ -21,9 +21,9 @@
   ],
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/Baseline-JS/baseline-dynamodb/issues"
+    "url": "https://github.com/Baseline-JS/dynamodb/issues"
   },
-  "homepage": "https://github.com/Baseline-JS/baseline-dynamodb#readme",
+  "homepage": "https://github.com/Baseline-JS/dynamodb#readme",
   "devDependencies": {
     "@types/node": "^20.11.24",
     "prettier": "^3.2.5",
