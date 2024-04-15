@@ -40,15 +40,15 @@ Baseline DynamoDB is an optimized utility library that simplifies standard Dynam
 ## Installation
 
 ```sh
-npm install baseline-dynamodb
+npm install @baselinejs/dynamodb
 ```
 
 ```sh
-yarn add baseline-dynamodb
+yarn add @baselinejs/dynamodb
 ```
 
 ```sh
-pnpm install baseline-dynamodb
+pnpm install @baselinejs/dynamodb
 ```
 
 ## Quick Start
@@ -336,8 +336,6 @@ Unmarshalling is used to convert a DynamoDB record into a JavaScript object.
 This is useful when using dynamodb streams, as the new and old images are returned as DynamoDB records that need to be unmarshalled.
 
 ```ts
-import { unmarshallItem } from 'baseline-dynamodb';
-
 const user = unmarshallItem<User>(record.dynamodb?.NewImage);
 ```
 
@@ -346,8 +344,6 @@ const user = unmarshallItem<User>(record.dynamodb?.NewImage);
 Marshalling is used to convert a JavaScript object into a DynamoDB record.
 
 ```ts
-import { marshallItem } from 'baseline-dynamodb';
-
 const user = {
   userId: '123',
   email: 'example@example.com',
