@@ -1,513 +1,870 @@
 import {
+  AttributeValue,
+  DynamoDB,
+  DynamoDBClientConfig,
+} from '@aws-sdk/client-dynamodb';
+import {
+  BatchWriteCommandInput,
+  BatchGetCommandInput,
+  DeleteCommandInput,
   DynamoDBDocument,
   GetCommandInput,
+  PutCommandInput,
   QueryCommandInput,
   ScanCommandInput,
   UpdateCommandInput,
-  BatchGetCommandInput,
-  DeleteCommandInput,
-  PutCommandInput,
-} from "@aws-sdk/lib-dynamodb";
-import { DynamoDB, DynamoDBClientConfig } from "@aws-sdk/client-dynamodb";
-import { NativeAttributeValue } from "@aws-sdk/util-dynamodb";
+} from '@aws-sdk/lib-dynamodb';
+import {
+  NativeAttributeValue,
+  marshall,
+  marshallOptions,
+  unmarshall,
+  unmarshallOptions,
+} from '@aws-sdk/util-dynamodb';
+import {
+  sleep,
+  buildConditionExpression,
+  decorrelatedJitterBackoff,
+  ConditionExpressionArgs,
+  ConditionExpressionQueryArgs,
+} from './utils/utils';
 
-const IS_OFFLINE = process.env.IS_OFFLINE; // Set by serverless-offline https://github.com/dherault/serverless-offline
+// Re export useful util types
+export { type ConditionExpressionArgs, type ConditionExpressionQueryArgs };
+export type DynamoClientConfig = DynamoDBClientConfig & { region: string };
 
-export let dynamoDb: DynamoDBDocument | undefined = undefined;
+/**
+ * Provided to get around conflicting versions of DynamoDBDocument from @aws-sdk/lib-dynamodb
+ */
+export type DynamoDbDocumentClient = DynamoDBDocument;
 
-type Key = Record<string, NativeAttributeValue>;
-type DynamoClientConfig = DynamoDBClientConfig & { region: string };
+const IS_OFFLINE = process.env.IS_OFFLINE;
+const FORCE_ONLINE = process.env.FORCE_ONLINE;
 
-function newDynamodbConnection(config: DynamoClientConfig): DynamoDBDocument {
-  console.log("DynamoDB Init");
-
-  let newConnection: DynamoDBDocument;
-  if (IS_OFFLINE === "true") {
+/**
+ * Creates a DynamoDBDocument connection.
+ *
+ * Must specify a region.
+ *
+ * Uses a local connection if IS_OFFLINE is set to "true" and FORCE_ONLINE is not set to "true".
+ */
+export function getDynamodbConnection(
+  config: DynamoClientConfig,
+): DynamoDbDocumentClient {
+  let newConnection: DynamoDbDocumentClient;
+  if (IS_OFFLINE === 'true' && FORCE_ONLINE !== 'true') {
     newConnection = DynamoDBDocument.from(
       new DynamoDB({
-        region: "localhost",
-        endpoint: "http://localhost:8000",
-      })
+        region: 'localhost',
+        endpoint: 'http://localhost:8000',
+      }),
     );
   } else {
-    newConnection = DynamoDBDocument.from(
-      new DynamoDB(config)
-    );
+    newConnection = DynamoDBDocument.from(new DynamoDB(config));
   }
   return newConnection;
 }
 
-export const getDynamodbConnection = (config: DynamoClientConfig): DynamoDBDocument => {
-  if (typeof dynamoDb === "undefined") {
-    dynamoDb = newDynamodbConnection(config);
-  }
-  return dynamoDb;
-};
-
-interface GetParams {
-  dynamoDb: DynamoDBDocument;
+export interface PutItemParams<T extends Record<string, NativeAttributeValue>> {
+  dynamoDb: DynamoDbDocumentClient;
   table: string;
-  key: Key;
+  item: T;
+  /**
+   * Array of conditions to apply to the create.
+   * Conditions are combined with AND.
+   */
+  conditions?: ConditionExpressionArgs[];
 }
 
-export const get = async <T>(getParams: GetParams): Promise<T> => {
-  try {
-    const params: GetCommandInput = {
-      TableName: getParams.table || "",
-      Key: getParams.key,
-    };
-    const result = await getParams.dynamoDb.get(params);
-    return result.Item as T;
-  } catch (error) {
-    const message = getErrorMessage(error);
-    console.error(`Failed to get record: ${message}`);
-    throw new Error(message);
+/**
+ * Create a new item.
+ */
+export const putItem = async <T extends Record<string, NativeAttributeValue>>(
+  params: PutItemParams<T>,
+): Promise<T> => {
+  const dynamoDb = params.dynamoDb;
+
+  const putItemInput: PutCommandInput = {
+    TableName: params.table,
+    Item: params.item,
+    ReturnValuesOnConditionCheckFailure: 'ALL_OLD',
+  };
+
+  const conditionalData = buildConditionExpression(params.conditions);
+  if (conditionalData?.attributeNames) {
+    putItemInput.ExpressionAttributeNames = conditionalData.attributeNames;
   }
+
+  if (conditionalData?.attributeValues) {
+    putItemInput.ExpressionAttributeValues = conditionalData.attributeValues;
+  }
+
+  if (conditionalData?.conditionExpression) {
+    putItemInput.ConditionExpression = conditionalData.conditionExpression;
+  }
+
+  await dynamoDb.put(putItemInput);
+  return params.item;
 };
 
-interface GetAllParams {
-  dynamoDb: DynamoDBDocument;
-  table: string;
-}
-
-export const getAll = async <T>(params: GetAllParams): Promise<T[]> => {
-  try {
-    const scanInputArgs: ScanCommandInput = {
-      TableName: params.table || "",
-    };
-    const allRecords: T[] = [];
-    let lastKey: Key | undefined = undefined;
-    do {
-      const result = await params.dynamoDb.scan(scanInputArgs);
-      const resultRecords = result.Items as T[];
-      allRecords.push(...resultRecords);
-      lastKey = result.LastEvaluatedKey;
-      scanInputArgs.ExclusiveStartKey = lastKey;
-    } while (lastKey);
-
-    return allRecords;
-  } catch (error) {
-    const message = getErrorMessage(error);
-    console.error(`Failed to get all records: ${message}`);
-    throw new Error(message);
-  }
-};
-
-export const buildConditionExpression = (
-  args: ConditionExpressionArgs
-): string => {
-  const { operator, value, betweenSecondValue, field } = args;
-  let conditionExpression = "";
-  switch (operator) {
-    case "BeginsWith":
-      conditionExpression = `begins_with(${field}, ${value})`;
-      break;
-    case "Equal":
-      conditionExpression = `${field} = ${value}`;
-      break;
-    case "NotEqual":
-      conditionExpression = `${field} <> ${value}`;
-      break;
-    case "GreaterThan":
-      conditionExpression = `${field} > ${value}`;
-      break;
-    case "GreaterThanEqual":
-      conditionExpression = `${field} >= ${value}`;
-      break;
-    case "LessThan":
-      conditionExpression = `${field} < ${value}`;
-      break;
-    case "LessThanEqual":
-      conditionExpression = `${field} <= ${value}`;
-      break;
-    case "Between":
-      conditionExpression = `${field} BETWEEN ${value} AND ${betweenSecondValue}`;
-      break;
-    case "AttributeNotExists":
-      conditionExpression = `attribute_not_exists(${field})`;
-      break;
-    default:
-      throw new Error("Unknown Query Condition type");
-  }
-  return conditionExpression;
-};
-
-export type OperatorType =
-  | "BeginsWith"
-  | "LessThan"
-  | "GreaterThan"
-  | "LessThanEqual"
-  | "GreaterThanEqual"
-  | "Equal"
-  | "NotEqual"
-  | "Between"
-  | "AttributeNotExists";
-
-export interface ConditionExpressionArgs {
-  operator: OperatorType;
-  field: string;
-  value?: NativeAttributeValue;
-  /** Used for Between comparison */
-  betweenSecondValue?: NativeAttributeValue;
-}
-
-interface UpdateParams<T> {
-  dynamoDb: DynamoDBDocument;
-  table: string;
-  key: Key;
-  fields: Partial<Record<keyof T, NativeAttributeValue>>;
-  updateConditions?: ConditionExpressionArgs[];
-}
-
-export interface UpdateItem {
+interface UpdateItem {
   name: string;
   attributeName: string;
   attributeValue: NativeAttributeValue;
   ref: string;
 }
 
-export const update = async <T>(params: UpdateParams<T>): Promise<T> => {
-  console.log(
-    `Update record [${Object.keys(params.fields).join(", ")}] on table ${params.table
-    }`
-  );
-  try {
-    const updateItems: UpdateItem[] = [];
-    let index = 0;
-    for (const element in params.fields) {
-      const attributeValue = params.fields[element];
-      if (
-        typeof params.fields[element] !== undefined &&
-        params.fields[element] !== undefined
-      ) {
-        updateItems.push({
-          name: element,
-          attributeName: `#attr${index}`,
-          attributeValue,
-          ref: `:attr${index}`,
-        });
-      }
+export interface UpdateItemParams<
+  T extends Record<string, NativeAttributeValue>,
+> {
+  dynamoDb: DynamoDbDocumentClient;
+  table: string;
+  key: Record<string, NativeAttributeValue>;
+  /**
+   * Record of fields to update.
+   * Attributes from the "key" will be automatically removed from fields to prevent "This attribute is part of the key" errors.
+   */
+  fields?: Partial<Record<keyof T, NativeAttributeValue>>;
+  /**
+   * Array of attributes to remove from the item.
+   */
+  removeFields?: Extract<keyof T, string>[];
+  /**
+   * Array of conditions to apply to the update.
+   * Conditions are combined with AND.
+   */
+  conditions?: ConditionExpressionArgs[];
+}
 
-      index = index + 1;
-    }
+/**
+ * Update attributes on an item.
+ *
+ * Returns null if no fields are to be updated or deleted.
+ *
+ * Specify "fields" for the attributes to update.
+ *
+ * Specify "removeFields" for the attributes to remove from the item.
+ *
+ * Either "fields", "removeFields" or both must be specified.
+ */
+export const updateItem = async <
+  T extends Record<string, NativeAttributeValue>,
+>(
+  params: UpdateItemParams<T>,
+): Promise<T | null> => {
+  const updateItems: UpdateItem[] = [];
 
-    // This may not be the best way to handle this
-    if (!updateItems.length) {
-      console.log("Nothing to update");
-      return await get<T>({
-        dynamoDb: params.dynamoDb,
-        table: params.table,
-        key: params.key,
+  let count = 0;
+
+  const keyNames = Object.keys(params.key);
+  for (const element in params.fields) {
+    const attributeValue = params.fields[element];
+    if (attributeValue !== undefined && !keyNames.includes(element)) {
+      updateItems.push({
+        name: element,
+        attributeName: `#attr${count}`,
+        attributeValue,
+        ref: `:attr${count}`,
       });
+      count++;
     }
+  }
 
-    const updateExpression =
-      "set " + updateItems.map((i) => `${i.attributeName}=${i.ref}`).join(", ");
+  const removeAttributeItems: { name: keyof T; attributeName: string }[] = [];
+  for (const field of params.removeFields || []) {
+    if (field !== undefined && !keyNames.includes(field)) {
+      removeAttributeItems.push({
+        name: field,
+        attributeName: `#attr${count}`,
+      });
+      count++;
+    }
+  }
 
-    const expressionAttributeValues = updateItems.reduce((p, c: UpdateItem) => {
+  if (!updateItems.length && !removeAttributeItems.length) {
+    return null;
+  }
+
+  let updateExpression = '';
+  if (updateItems.length) {
+    updateExpression =
+      'SET ' + updateItems.map((i) => `${i.attributeName}=${i.ref}`).join(', ');
+  }
+
+  if (removeAttributeItems.length) {
+    updateExpression +=
+      (updateExpression.length > 1 ? ' REMOVE ' : 'REMOVE') +
+      removeAttributeItems.map((i) => i.attributeName).join(', ');
+  }
+
+  const expressionAttributeValues = updateItems.reduce(
+    (p, c: UpdateItem) => {
       p[`${c.ref}`] = c.attributeValue;
       return p;
-    }, {} as Record<string, NativeAttributeValue>);
+    },
+    {} as Record<string, NativeAttributeValue>,
+  );
 
-    const expressionAttributeNames = updateItems.reduce((p, c: UpdateItem) => {
+  const expressionAttributeNames = [
+    ...updateItems,
+    ...removeAttributeItems,
+  ].reduce(
+    (p, c) => {
       p[`${c.attributeName}`] = c.name;
       return p;
-    }, {} as Record<string, string>);
+    },
+    {} as Record<string, NativeAttributeValue>,
+  );
 
-    const updateItemInput: UpdateCommandInput = {
-      TableName: params.table || "",
-      Key: params.key,
-      UpdateExpression: updateExpression,
-      ExpressionAttributeValues: expressionAttributeValues,
-      ExpressionAttributeNames: expressionAttributeNames,
-      ReturnValues: "ALL_NEW",
-    };
-
-    let count = 0;
-    if (params?.updateConditions?.length) {
-      updateItemInput.ConditionExpression = "";
-      params.updateConditions.forEach((values: ConditionExpressionArgs) => {
-        if (updateItemInput.ConditionExpression?.length) {
-          updateItemInput.ConditionExpression += " AND ";
-        }
-        updateItemInput.ConditionExpression += buildConditionExpression({
-          field: `#field${count}`,
-          value: `:val${count}`,
-          operator: values.operator,
-          betweenSecondValue: `#val${count + 1}`,
-        });
-        expressionAttributeNames[`#field${count}`] = values.field;
-
-        if (values.field) {
-          expressionAttributeValues[`:val${count}`] = values.value;
-        }
-
-        if (values.betweenSecondValue) {
-          expressionAttributeValues[`:val${count + 1}`] =
-            values.betweenSecondValue;
-        }
-        count += 2;
-      });
-    }
-
-    const result = await params.dynamoDb.update(updateItemInput);
-    return result.Attributes as T;
-  } catch (error) {
-    const message = getErrorMessage(error);
-    console.error(`Failed to update record: ${message}`);
-    throw new Error(message);
-  }
-};
-
-interface QueryByKeyAndFilterParams {
-  dynamoDb: DynamoDBDocument;
-  table: string;
-  keyName: string;
-  keyValue: NativeAttributeValue;
-  indexName?: string;
-  filterKeyName: string;
-  filterKeyValue: NativeAttributeValue;
-}
-
-export const queryByKeyAndFilter = async <T>(
-  params: QueryByKeyAndFilterParams
-): Promise<T[]> => {
-  try {
-    const queryParams: QueryCommandInput = {
-      TableName: params.table,
-      KeyConditionExpression: `#a = :b`,
-      FilterExpression: `#c = :d`,
-      ExpressionAttributeNames: {
-        "#a": params.keyName,
-        "#c": params.filterKeyName,
-      },
-      ExpressionAttributeValues: {
-        ":b": params.keyValue,
-        ":d": params.filterKeyValue,
-      },
-    };
-    if (params?.indexName) {
-      queryParams.IndexName = params?.indexName;
-    }
-
-    const allRecords: T[] = [];
-    let lastKey: Key | undefined = undefined;
-    do {
-      const result = await params.dynamoDb.query(queryParams);
-      const resultRecords = result.Items as T[];
-      allRecords.push(...resultRecords);
-      lastKey = result.LastEvaluatedKey;
-      queryParams.ExclusiveStartKey = lastKey;
-    } while (lastKey);
-
-    return allRecords;
-  } catch (error) {
-    const message = getErrorMessage(error);
-    console.error("Failed to complete query");
-    throw new Error(message);
-  }
-};
-
-interface QueryByKeyAndFilterBetweenParams {
-  dynamoDb: DynamoDBDocument;
-  table: string;
-  keyName: string;
-  keyValue: NativeAttributeValue;
-  indexName?: string;
-  filterKeyName: string;
-  filterKeyValueMin: NativeAttributeValue;
-  filterKeyValueMax: NativeAttributeValue;
-}
-
-export const queryByKeyAndFilterBetween = async <T>(
-  params: QueryByKeyAndFilterBetweenParams
-): Promise<T[]> => {
-  try {
-    const queryParams: QueryCommandInput = {
-      TableName: params.table,
-      KeyConditionExpression: `#a = :b And #c BETWEEN :d AND :e`,
-      ExpressionAttributeNames: {
-        "#a": params.keyName,
-        "#c": params.filterKeyName,
-      },
-      ExpressionAttributeValues: {
-        ":b": params.keyValue,
-        ":d": params.filterKeyValueMin,
-        ":e": params.filterKeyValueMax,
-      },
-    };
-
-    if (params?.indexName) {
-      queryParams.IndexName = params?.indexName;
-    }
-
-    const allRecords: T[] = [];
-    let lastKey: Key | undefined = undefined;
-    do {
-      const result = await params.dynamoDb.query(queryParams);
-      const resultRecords = result.Items as T[];
-      allRecords.push(...resultRecords);
-      lastKey = result.LastEvaluatedKey;
-      queryParams.ExclusiveStartKey = lastKey;
-    } while (lastKey);
-
-    return allRecords;
-  } catch (error) {
-    const message = getErrorMessage(error);
-    console.error("Failed to complete query");
-    throw new Error(message);
-  }
-};
-
-interface QueryByKeyParams {
-  dynamoDb: DynamoDBDocument;
-  table: string;
-  keyName: string;
-  keyValue: NativeAttributeValue;
-  indexName?: string;
-}
-
-export const queryByKey = async <T>(params: QueryByKeyParams): Promise<T[]> => {
-  try {
-    const queryParams: QueryCommandInput = {
-      TableName: params.table,
-      KeyConditionExpression: `#a = :b`,
-      ExpressionAttributeNames: {
-        "#a": params.keyName,
-      },
-      ExpressionAttributeValues: {
-        ":b": params.keyValue,
-      },
-    };
-    if (params?.indexName) {
-      queryParams.IndexName = params?.indexName;
-    }
-
-    const allRecords: T[] = [];
-    let lastKey: Key | undefined = undefined;
-    do {
-      const result = await params.dynamoDb.query(queryParams);
-      const resultRecords = result.Items as T[];
-      allRecords.push(...resultRecords);
-      lastKey = result.LastEvaluatedKey;
-      queryParams.ExclusiveStartKey = lastKey;
-    } while (lastKey);
-
-    return allRecords;
-  } catch (error) {
-    const message = getErrorMessage(error);
-    console.error("Failed to complete query");
-    throw new Error(message);
-  }
-};
-
-interface PutItemParams<T extends Record<string, NativeAttributeValue>> {
-  dynamoDb: DynamoDBDocument;
-  table: string;
-  item: T;
-}
-
-export const putItem = async <T extends Record<string, NativeAttributeValue>>(
-  params: PutItemParams<T>
-): Promise<T> => {
-  const putItemParams: PutCommandInput = {
-    TableName: params.table,
-    Item: params.item,
+  const updateItemInput: UpdateCommandInput = {
+    TableName: params.table || '',
+    Key: params.key,
+    UpdateExpression: updateExpression,
+    ReturnValues: 'ALL_NEW',
+    ExpressionAttributeNames: expressionAttributeNames,
+    ExpressionAttributeValues: expressionAttributeValues,
+    ReturnValuesOnConditionCheckFailure: 'ALL_OLD',
   };
-  await params.dynamoDb.put(putItemParams);
-  return params.item;
+
+  const conditionalData = buildConditionExpression(params.conditions);
+  if (conditionalData?.attributeNames) {
+    updateItemInput.ExpressionAttributeNames = {
+      ...updateItemInput.ExpressionAttributeNames,
+      ...conditionalData.attributeNames,
+    };
+  }
+
+  if (conditionalData?.attributeValues) {
+    updateItemInput.ExpressionAttributeValues = {
+      ...updateItemInput.ExpressionAttributeValues,
+      ...conditionalData.attributeValues,
+    };
+  }
+
+  if (conditionalData?.conditionExpression) {
+    updateItemInput.ConditionExpression = conditionalData.conditionExpression;
+  }
+
+  const result = await params.dynamoDb.update(updateItemInput);
+  return result.Attributes as T;
 };
 
-interface BatchGetParams {
-  dynamoDb: DynamoDBDocument;
+export interface DeleteItemParams {
+  dynamoDb: DynamoDbDocumentClient;
   table: string;
-  keyName: string;
-  ids: string[];
+  key: Record<string, NativeAttributeValue>;
+  /**
+   * Array of conditions to apply to the delete.
+   * Conditions are combined with AND.
+   */
+  conditions?: ConditionExpressionArgs[];
 }
 
-// todo multiple table support
-export const batchGet = async <T>(params: BatchGetParams): Promise<T[]> => {
-  if (!params.ids.length) {
+export const deleteItem = async (
+  params: DeleteItemParams,
+): Promise<boolean> => {
+  const deleteInput: DeleteCommandInput = {
+    TableName: `${params.table}`,
+    Key: params.key,
+    ReturnValuesOnConditionCheckFailure: 'ALL_OLD',
+  };
+
+  const conditionalData = buildConditionExpression(params.conditions);
+  if (conditionalData?.attributeNames) {
+    deleteInput.ExpressionAttributeNames = conditionalData.attributeNames;
+  }
+
+  if (conditionalData?.attributeValues) {
+    deleteInput.ExpressionAttributeValues = conditionalData.attributeValues;
+  }
+
+  if (conditionalData?.conditionExpression) {
+    deleteInput.ConditionExpression = conditionalData.conditionExpression;
+  }
+
+  await params.dynamoDb.delete(deleteInput);
+  return true;
+};
+
+export interface GetItemParams<K> {
+  dynamoDb: DynamoDbDocumentClient;
+  table: string;
+  key: Record<string, NativeAttributeValue>;
+  consistentRead?: boolean;
+  /**
+   * Specific attributes to be returned on the item.
+   *
+   * When using this provide the K type including each of these attributes.
+   */
+  projectionExpression?: K[];
+}
+
+/**
+ * Get a single item.
+ */
+export function getItem<T extends Record<string, NativeAttributeValue>>(
+  params: GetItemParams<keyof T>,
+): Promise<T>;
+
+/**
+ * Get a single item.
+ *
+ * Specify K when using a projectionExpression
+ */
+export function getItem<
+  T extends Record<string, NativeAttributeValue>,
+  K extends keyof T,
+>(params: GetItemParams<K>): Promise<Pick<T, K>>;
+
+/**
+ * Get a single item.
+ *
+ * Specify K type when using a projectionExpression
+ */
+export async function getItem<
+  T extends Record<string, NativeAttributeValue>,
+  K extends keyof T,
+>(params: GetItemParams<K>): Promise<T> {
+  const getItemInput: GetCommandInput = {
+    TableName: params.table || '',
+    Key: params.key,
+  };
+
+  if (params.consistentRead) {
+    getItemInput.ConsistentRead = params.consistentRead;
+  }
+
+  const result = await params.dynamoDb.get(getItemInput);
+  return result.Item as T;
+}
+
+export interface GetAllItemsParams<K> {
+  dynamoDb: DynamoDbDocumentClient;
+  table: string;
+  /**
+   * Limit the number of items returned.
+   * This will continue fetching items until the limit is reached or there are no more items.
+   */
+  limit?: number;
+  consistentRead?: boolean;
+  /**
+   * Array of conditions to apply to the scan.
+   * Conditions are combined with AND.
+   */
+  filterConditions?: ConditionExpressionArgs[];
+  /**
+   * Specific attributes to be returned on each item.
+   *
+   * When using this provide the K type including each of these attributes.
+   */
+  projectionExpression?: K[];
+  exclusiveStartKey?: Record<string, NativeAttributeValue>;
+}
+
+// Overload for when K is not provided, using keyof T as the default for K
+// Allows for a return type of T[] when K is not provided.
+
+/**
+ * Scan items from a table.
+ */
+export function getAllItems<T extends Record<string, NativeAttributeValue>>(
+  params: GetAllItemsParams<keyof T>,
+): Promise<T[]>;
+
+/**
+ * Scan items from a table.
+ */
+export function getAllItems<
+  T extends Record<string, NativeAttributeValue>,
+  K extends keyof T,
+>(params: GetAllItemsParams<K>): Promise<Pick<T, K>[]>;
+
+/**
+ * Scan items from a table.
+ */
+export async function getAllItems<
+  T extends Record<string, NativeAttributeValue>,
+>(params: GetAllItemsParams<keyof T>): Promise<T[]> {
+  const scanInput: ScanCommandInput = {
+    TableName: params.table || '',
+  };
+
+  if (params.consistentRead) {
+    scanInput.ConsistentRead = params.consistentRead;
+  }
+
+  if (params.limit) {
+    scanInput.Limit = params.limit;
+  }
+
+  if (params.projectionExpression) {
+    scanInput.ProjectionExpression = params.projectionExpression.join(',');
+  }
+
+  if (params.exclusiveStartKey) {
+    scanInput.ExclusiveStartKey = params.exclusiveStartKey;
+  }
+
+  const conditionalData = buildConditionExpression(params.filterConditions);
+  if (conditionalData?.attributeNames) {
+    scanInput.ExpressionAttributeNames = conditionalData.attributeNames;
+  }
+
+  if (conditionalData?.attributeValues) {
+    scanInput.ExpressionAttributeValues = conditionalData.attributeValues;
+  }
+
+  if (conditionalData?.conditionExpression) {
+    scanInput.FilterExpression = conditionalData.conditionExpression;
+  }
+
+  const allRecords: T[] = [];
+  let lastKey: Record<string, NativeAttributeValue> | undefined = undefined;
+  do {
+    const result = await params.dynamoDb.scan(scanInput);
+    const resultRecords = result.Items as T[];
+    allRecords.push(...resultRecords);
+    lastKey = result.LastEvaluatedKey;
+    scanInput.ExclusiveStartKey = lastKey;
+  } while (lastKey && (params.limit ? allRecords.length < params.limit : true));
+
+  return allRecords;
+}
+
+export interface BatchGetItemsParams {
+  dynamoDb: DynamoDbDocumentClient;
+  table: string;
+  /**
+   * Keys of items to get.
+   * Automatically handles chunking the keys by 100.
+   */
+  keys: Record<string, NativeAttributeValue>[];
+}
+
+/**
+ * Batch get items from a table.
+ * Automatically handles chunking the keys by 100.
+ * Items are returned in an arbitrary order.
+ */
+export const batchGetItems = async <
+  T extends Record<string, NativeAttributeValue>,
+>(
+  params: BatchGetItemsParams,
+): Promise<T[]> => {
+  if (!params.keys.length) {
     return [];
   }
 
-  const uniqueIds = params.ids.filter((item, pos) => {
-    return params.ids.indexOf(item) === pos;
-  });
+  const unique = new Map<string, Record<string, NativeAttributeValue>>();
+
+  for (const item of params.keys) {
+    const key = JSON.stringify(item);
+    if (!unique.has(key)) {
+      unique.set(key, item);
+    }
+  }
+
+  const uniqueIds = Array.from(unique.values());
 
   const totalBatches = Math.ceil(uniqueIds.length / 100);
-  const idBatches: Array<string[]> = [];
+  const keyBatches: Record<string, any>[][] = [];
   for (let index = 0; index < totalBatches; index++) {
     const start = index * 100;
     const end = start + 100 > uniqueIds.length ? uniqueIds.length : start + 100;
     const batch = uniqueIds.slice(start, end);
-    idBatches.push(batch);
+    keyBatches.push(batch);
   }
 
-  const promises = idBatches.map((batch) => {
-    const keys = batch.map((id) => {
-      return { [params.keyName]: id };
-    });
-    const batchGetParams: BatchGetCommandInput = {
+  const initialPromises = keyBatches.map((keyBatch) => {
+    const batchGetInput: BatchGetCommandInput = {
       RequestItems: {
         [params.table]: {
-          Keys: keys,
+          Keys: keyBatch,
         },
       },
     };
-
-    // todo handle multiple pages incase of larger records
-    return params.dynamoDb.batchGet(batchGetParams);
+    return params.dynamoDb.batchGet(batchGetInput);
   });
 
-  const results = await Promise.all(promises);
-  const records = results.flatMap(
-    (result) => result.Responses?.[params.table] as T[]
-  );
+  const initialResults = await Promise.all(initialPromises);
+  let allRecords: T[] = [];
+  for (const result of initialResults) {
+    const records = result.Responses?.[params.table] as T[];
+    allRecords = allRecords.concat(records);
 
-  return records;
-};
-
-interface DeleteItemParams {
-  dynamoDb: DynamoDBDocument;
-  table: string;
-  keyName?: string;
-  keyValue?: string;
-  key?: Key;
-}
-
-export const deleteItem = async (params: DeleteItemParams) => {
-  params.key
-    ? console.log(`Delete ${params.table} : ${JSON.stringify(params.key)}`)
-    : console.log(
-      `Delete ${params.table} : ${params.keyName} : [${params.keyValue}]`
-    );
-
-  try {
-    const deleteParams: DeleteCommandInput = {
-      TableName: `${params.table}`,
-      Key: params.key
-        ? params.key
-        : {
-          [`${params.keyName}`]: params.keyValue,
+    let unprocessedKeys = result.UnprocessedKeys?.[params.table]?.Keys;
+    while (unprocessedKeys && unprocessedKeys.length) {
+      const batchGetInput: BatchGetCommandInput = {
+        RequestItems: {
+          [params.table]: {
+            Keys: unprocessedKeys,
+          },
         },
-    };
-
-    await params.dynamoDb.delete(deleteParams);
-    return true;
-  } catch (error) {
-    const message = getErrorMessage(error);
-    console.error(`Failed to delete: ${message}`);
-    throw new Error(message);
+      };
+      const retryResult = await params.dynamoDb.batchGet(batchGetInput);
+      const retryRecords = retryResult.Responses?.[params.table] as T[];
+      allRecords = allRecords.concat(retryRecords);
+      unprocessedKeys = retryResult.UnprocessedKeys?.[params.table]?.Keys;
+    }
   }
+
+  return allRecords;
 };
 
-function getErrorMessage(error: unknown) {
-  let message: string;
-  if (error instanceof Error) {
-    message = error.message;
-  } else {
-    message = String(error);
-  }
-  return message;
+export interface QueryItemsParams<K> {
+  dynamoDb: DynamoDbDocumentClient;
+  table: string;
+  keyName: string;
+  keyValue: NativeAttributeValue;
+  /**
+   * Which GSI or LSI to query.
+   */
+  indexName?: string;
+  /**
+   * Specify as false to query in reverse order.
+   */
+  scanIndexForward?: boolean;
+  /**
+   * Consistent reads for queries can only be done with no index specified or an LSI.
+   */
+  consistentRead?: boolean;
+  /**
+   * Limit the number of items returned.
+   * This will continue fetching items until the limit is reached or there are no more items.
+   */
+  limit?: number;
+  /**
+   * Condition to be applied to the sort key.
+   */
+  rangeCondition?: ConditionExpressionQueryArgs;
+  /**
+   * Specific attributes to be returned on each item.
+   *
+   * When using this provide the K type including each of these attributes.
+   */
+  projectionExpression?: K[];
+  exclusiveStartKey?: Record<string, NativeAttributeValue>;
 }
+
+/**
+ * Query items from a table.
+ */
+export function queryItems<T extends Record<string, NativeAttributeValue>>(
+  params: QueryItemsParams<keyof T>,
+): Promise<T[]>;
+
+/**
+ * Query items from a table.
+ */
+export function queryItems<
+  T extends Record<string, NativeAttributeValue>,
+  K extends keyof T,
+>(params: QueryItemsParams<K>): Promise<Pick<T, K>[]>;
+
+/**
+ * Query items from a table.
+ */
+export async function queryItems<
+  T extends Record<string, NativeAttributeValue>,
+>(params: QueryItemsParams<keyof T>): Promise<T[]> {
+  const queryInput: QueryCommandInput = {
+    TableName: params.table,
+    KeyConditionExpression: `#a = :b`,
+    ExpressionAttributeNames: {
+      '#a': params.keyName,
+    },
+    ExpressionAttributeValues: {
+      ':b': params.keyValue,
+    },
+  };
+
+  if (params?.indexName) {
+    queryInput.IndexName = params?.indexName;
+  }
+
+  if (params?.exclusiveStartKey) {
+    queryInput.ExclusiveStartKey = params?.exclusiveStartKey;
+  }
+
+  if (params.consistentRead) {
+    queryInput.ConsistentRead = params.consistentRead;
+  }
+
+  if (params?.scanIndexForward === false) {
+    queryInput.ScanIndexForward = false;
+  }
+
+  if (params?.limit) {
+    queryInput.Limit = params.limit;
+  }
+
+  if (params.projectionExpression) {
+    queryInput.ProjectionExpression = params.projectionExpression.join(',');
+  }
+
+  const rangeData = buildConditionExpression(
+    params.rangeCondition ? [params.rangeCondition] : undefined,
+  );
+  if (rangeData?.attributeNames) {
+    queryInput.ExpressionAttributeNames = {
+      ...queryInput.ExpressionAttributeNames,
+      ...rangeData.attributeNames,
+    };
+  }
+
+  if (rangeData?.attributeValues) {
+    queryInput.ExpressionAttributeValues = {
+      ...queryInput.ExpressionAttributeValues,
+      ...rangeData.attributeValues,
+    };
+  }
+
+  if (rangeData?.conditionExpression) {
+    queryInput.KeyConditionExpression = `${queryInput.KeyConditionExpression} AND ${rangeData?.conditionExpression}`;
+  }
+
+  const allRecords: T[] = [];
+  let lastKey: Record<string, NativeAttributeValue> | undefined = undefined;
+  do {
+    const result = await params.dynamoDb.query(queryInput);
+    const resultRecords = result.Items as T[];
+    allRecords.push(...resultRecords);
+    lastKey = result.LastEvaluatedKey;
+    queryInput.ExclusiveStartKey = lastKey;
+  } while (lastKey && (params.limit ? allRecords.length < params.limit : true));
+
+  return allRecords;
+}
+
+export interface QueryRangeParams<K>
+  extends Omit<QueryItemsParams<K>, 'rangeCondition'> {
+  rangeKeyName: string;
+  rangeKeyValue: string;
+  /**
+   * Specify as true to use a begins_with condition on the sort key.
+   * Specify as falsy to use an equals condition on the sort key.
+   */
+  fuzzy?: boolean;
+}
+
+/**
+ * A wrapper for dynamoQuery that simplifies the usage of the sort key with an equals or begins_with condition.
+ */
+export function queryItemsRange<T extends Record<string, NativeAttributeValue>>(
+  params: QueryRangeParams<keyof T>,
+): Promise<T[]>;
+
+/**
+ * A wrapper for dynamoQuery that simplifies the usage of the sort key with an equals or begins_with condition.
+ */
+export function queryItemsRange<
+  T extends Record<string, NativeAttributeValue>,
+  K extends keyof T,
+>(params: QueryRangeParams<K>): Promise<Pick<T, K>[]>;
+
+/**
+ * A wrapper for dynamoQuery that simplifies the usage of the sort key with an equals or begins_with condition.
+ */
+export async function queryItemsRange<
+  T extends Record<string, NativeAttributeValue>,
+>(params: QueryRangeParams<keyof T>): Promise<T[]> {
+  const result = await queryItems<T>({
+    ...params,
+    rangeCondition: {
+      operator: params.fuzzy ? 'BeginsWith' : 'Equal',
+      field: params.rangeKeyName,
+      value: params.rangeKeyValue,
+    },
+  });
+
+  return result;
+}
+
+export interface QueryItemsRangeBetweenParams<K>
+  extends Omit<QueryItemsParams<K>, 'rangeCondition'> {
+  rangeKeyName: string;
+  rangeKeyValueMin: string;
+  rangeKeyValueMax: string;
+}
+
+/**
+ * A wrapper for dynamoQuery that simplifies the usage of the sort key with a 'between' condition
+ */
+export function queryItemsRangeBetween<
+  T extends Record<string, NativeAttributeValue>,
+>(params: QueryItemsRangeBetweenParams<keyof T>): Promise<T[]>;
+
+/**
+ * A wrapper for dynamoQuery that simplifies the usage of the sort key with a 'between' condition
+ */
+export function queryItemsRangeBetween<
+  T extends Record<string, NativeAttributeValue>,
+  K extends keyof T,
+>(params: QueryItemsRangeBetweenParams<K>): Promise<Pick<T, K>[]>;
+
+/**
+ * A wrapper for dynamoQuery that simplifies the usage of the sort key with a 'between' condition
+ */
+export async function queryItemsRangeBetween<
+  T extends Record<string, NativeAttributeValue>,
+>(params: QueryItemsRangeBetweenParams<keyof T>): Promise<T[]> {
+  const result = await queryItems<T>({
+    ...params,
+    rangeCondition: {
+      operator: 'Between',
+      field: params.rangeKeyName,
+      value: params.rangeKeyValueMin,
+      betweenSecondValue: params.rangeKeyValueMax,
+    },
+  });
+
+  return result;
+}
+
+export interface BatchPutItems<T extends Record<string, NativeAttributeValue>> {
+  dynamoDb: DynamoDbDocumentClient;
+  table: string;
+  /**
+   * Items to create.
+   * Automatically handles chunking the items by 25.
+   */
+  items: T[];
+}
+
+/**
+ * Batch create items into a table.
+ * Automatically handles chunking the items by 25.
+ */
+export const batchPutItems = async <
+  T extends Record<string, NativeAttributeValue>,
+>(
+  params: BatchPutItems<T>,
+): Promise<T[]> => {
+  const totalBatches = Math.ceil(params.items.length / 25);
+  const itemBatches: Record<string, any>[][] = [];
+  for (let index = 0; index < totalBatches; index++) {
+    const start = index * 25;
+    const end =
+      start + 25 > params.items.length ? params.items.length : start + 25;
+    const batch = params.items.slice(start, end);
+    itemBatches.push(batch);
+  }
+
+  const initialPromises = itemBatches.map((itemsBatch) => {
+    const batchWriteInput: BatchWriteCommandInput = {
+      RequestItems: {
+        [params.table]: itemsBatch.map((item) => ({
+          PutRequest: {
+            Item: item,
+          },
+        })),
+      },
+    };
+    return params.dynamoDb.batchWrite(batchWriteInput);
+  });
+
+  const initialResults = await Promise.all(initialPromises);
+
+  let previousDelay = 0;
+  for (const result of initialResults) {
+    let unprocessedItems = result.UnprocessedItems;
+    while (Object.keys(unprocessedItems || {}).length > 0) {
+      const batchWriteInput: BatchWriteCommandInput = {
+        RequestItems: unprocessedItems,
+      };
+
+      // https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Programming.Errors.html#Programming.Errors.BatchOperations
+      const delay = decorrelatedJitterBackoff(previousDelay);
+      await sleep(delay);
+
+      const retryResult = await params.dynamoDb.batchWrite(batchWriteInput);
+      unprocessedItems = retryResult.UnprocessedItems;
+    }
+  }
+
+  return params.items;
+};
+
+export interface BatchDeleteItemsParams {
+  dynamoDb: DynamoDbDocumentClient;
+  table: string;
+  /**
+   * Items to delete.
+   * Automatically handles chunking the items by 25.
+   */
+  keys: Record<string, NativeAttributeValue>[];
+}
+
+/**
+ * Batch delete items from a table.
+ * Automatically handles chunking the keys by 25.
+ */
+export const batchDeleteItems = async (
+  params: BatchDeleteItemsParams,
+): Promise<boolean> => {
+  const totalBatches = Math.ceil(params.keys.length / 25);
+  const keyBatches: Record<string, any>[][] = [];
+  for (let index = 0; index < totalBatches; index++) {
+    const start = index * 25;
+    const end =
+      start + 25 > params.keys.length ? params.keys.length : start + 25;
+    const batch = params.keys.slice(start, end);
+    keyBatches.push(batch);
+  }
+
+  const initialPromises = keyBatches.map((keysBatch) => {
+    const batchWriteInput: BatchWriteCommandInput = {
+      RequestItems: {
+        [params.table]: keysBatch.map((item) => ({
+          DeleteRequest: {
+            Key: item,
+          },
+        })),
+      },
+    };
+    return params.dynamoDb.batchWrite(batchWriteInput);
+  });
+
+  const initialResults = await Promise.all(initialPromises);
+
+  let previousDelay = 0;
+  for (const result of initialResults) {
+    let unprocessedItems = result.UnprocessedItems;
+    while (Object.keys(unprocessedItems || {}).length > 0) {
+      const batchWriteInput: BatchWriteCommandInput = {
+        RequestItems: unprocessedItems,
+      };
+
+      // https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Programming.Errors.html#Programming.Errors.BatchOperations
+      const delay = decorrelatedJitterBackoff(previousDelay);
+      await sleep(delay);
+
+      const retryResult = await params.dynamoDb.batchWrite(batchWriteInput);
+      unprocessedItems = retryResult.UnprocessedItems;
+    }
+  }
+
+  return true;
+};
+
+/**
+ * Unmarshalling is used to convert a DynamoDB record into a JavaScript object.
+ */
+export const unmarshallItem = <T extends Record<string, NativeAttributeValue>>(
+  item: Record<string, AttributeValue>,
+  options?: unmarshallOptions,
+): T => {
+  const unmarshallItem = unmarshall(item, options);
+  return unmarshallItem as T;
+};
+
+/**
+ * Marshalling is used to convert a JavaScript object into a DynamoDB record.
+ */
+export const marshallItem = <T extends Record<string, NativeAttributeValue>>(
+  item: T,
+  options?: marshallOptions,
+): Record<string, AttributeValue> => {
+  const unmarshallItem = marshall(item, options);
+  return unmarshallItem;
+};
