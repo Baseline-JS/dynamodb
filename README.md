@@ -35,7 +35,6 @@ Baseline DynamoDB is an optimized utility library that simplifies standard Dynam
 - [Error Handling](#error-handling)
 - [Environment Variables](#environment-variables)
   - [Serverless Offline](#serverless-offline)
-- [Use Local Version](#use-local-version)
 
 ## Installation
 
@@ -375,11 +374,3 @@ endpoint: "http://localhost:8000",
 `FORCE_ONLINE`
 
 Set to `"true"` to override the `IS_OFFLINE` environment variable and use a deployed DynamoDB instance.
-
-## Use Local Version
-
-Using the following in a local project you can test.
-
-`pnpm link <path-to-local-npm-package>`
-
-Might need to run `npm run build` in this root directory first.
