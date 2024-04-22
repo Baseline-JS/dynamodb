@@ -149,7 +149,7 @@ export const updateItem = async <
   T extends Record<string, NativeAttributeValue>,
 >(
   params: UpdateItemParams<T>,
-): Promise<T | null> => {
+): Promise<T> => {
   const updateItems: UpdateItem[] = [];
 
   let count = 0;
