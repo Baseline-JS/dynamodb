@@ -139,8 +139,6 @@ export interface UpdateItemParams<
 /**
  * Update attributes on an item.
  *
- * Returns null if no fields are to be updated or deleted.
- *
  * Specify "fields" for the attributes to update.
  *
  * Specify "removeFields" for the attributes to remove from the item.
@@ -151,7 +149,7 @@ export const updateItem = async <
   T extends Record<string, NativeAttributeValue>,
 >(
   params: UpdateItemParams<T>,
-): Promise<T | null> => {
+): Promise<T> => {
   const updateItems: UpdateItem[] = [];
 
   let count = 0;
@@ -182,7 +180,7 @@ export const updateItem = async <
   }
 
   if (!updateItems.length && !removeAttributeItems.length) {
-    return null;
+    throw new Error('No fields or removeFields provided to updateItem');
   }
 
   let updateExpression = '';
