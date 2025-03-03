@@ -637,7 +637,7 @@ export async function queryItems<
 export interface QueryRangeParams<K>
   extends Omit<QueryItemsParams<K>, 'rangeCondition'> {
   rangeKeyName: string;
-  rangeKeyValue: string;
+  rangeKeyValue: NativeAttributeValue;
   /**
    * Specify as true to use a begins_with condition on the sort key.
    * Specify as falsy to use an equals condition on the sort key.
@@ -681,8 +681,8 @@ export async function queryItemsRange<
 export interface QueryItemsRangeBetweenParams<K>
   extends Omit<QueryItemsParams<K>, 'rangeCondition'> {
   rangeKeyName: string;
-  rangeKeyValueMin: string;
-  rangeKeyValueMax: string;
+  rangeKeyValueMin: NativeAttributeValue;
+  rangeKeyValueMax: NativeAttributeValue;
 }
 
 /**
