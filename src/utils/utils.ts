@@ -1,3 +1,5 @@
+import { NativeAttributeValue } from '@aws-sdk/util-dynamodb';
+
 export type OperatorQueryType =
   | 'BeginsWith'
   | 'LessThan'
@@ -19,17 +21,17 @@ export type OperatorType =
 export interface ConditionExpressionArgs {
   operator: OperatorType;
   field: string;
-  value?: string;
+  value?: NativeAttributeValue;
   /** Used only for Between comparison */
-  betweenSecondValue?: string;
+  betweenSecondValue?: NativeAttributeValue;
 }
 
 export interface ConditionExpressionQueryArgs {
   operator: OperatorQueryType;
   field: string;
-  value?: string;
+  value?: NativeAttributeValue;
   /** Used only for Between comparison */
-  betweenSecondValue?: string;
+  betweenSecondValue?: NativeAttributeValue;
 }
 
 export const sleep = (ms: number) =>
@@ -91,7 +93,7 @@ const buildCondition = (args: ConditionExpressionArgs): string => {
 interface ConditionExpressData {
   conditionExpression: string;
   attributeNames: Record<string, string> | null;
-  attributeValues: Record<string, string> | null;
+  attributeValues: Record<string, NativeAttributeValue> | null;
 }
 
 export const buildConditionExpression = (
@@ -103,7 +105,7 @@ export const buildConditionExpression = (
 
   let count = 0;
   const attributeNames: Record<string, string> = {};
-  const attributeValues: Record<string, string> = {};
+  const attributeValues: Record<string, NativeAttributeValue> = {};
   let conditionExpression = '';
 
   conditions.forEach((values: ConditionExpressionArgs) => {
