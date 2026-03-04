@@ -25,12 +25,26 @@ import {
   sleep,
   buildConditionExpression,
   decorrelatedJitterBackoff,
+  BetweenRangeCondition,
   ConditionExpressionArgs,
   ConditionExpressionQueryArgs,
+  EqualsRangeCondition,
+  KeyAttribute,
+  OperatorRangeCondition,
+  RangeCondition,
+  toConditionExpressionQueryArgs,
 } from './utils/utils';
 
 // Re export useful util types
-export { type ConditionExpressionArgs, type ConditionExpressionQueryArgs };
+export {
+  type BetweenRangeCondition,
+  type ConditionExpressionArgs,
+  type ConditionExpressionQueryArgs,
+  type EqualsRangeCondition,
+  type KeyAttribute,
+  type OperatorRangeCondition,
+  type RangeCondition,
+};
 export type DynamoClientConfig = DynamoDBClientConfig & { region: string };
 
 /**
@@ -509,11 +523,9 @@ export const batchGetItems = async <
   return allRecords;
 };
 
-export interface QueryItemsParams<K> {
+interface QueryItemsParamsBase<K> {
   dynamoDb: DynamoDbDocumentClient;
   table: string;
-  keyName: string;
-  keyValue: NativeAttributeValue;
   /**
    * Which GSI or LSI to query.
    */
@@ -532,10 +544,6 @@ export interface QueryItemsParams<K> {
    */
   limit?: number;
   /**
-   * Condition to be applied to the sort key.
-   */
-  rangeCondition?: ConditionExpressionQueryArgs;
-  /**
    * Specific attributes to be returned on each item.
    *
    * When using this provide the K type including each of these attributes.
@@ -543,6 +551,59 @@ export interface QueryItemsParams<K> {
   projectionExpression?: K[];
   exclusiveStartKey?: Record<string, NativeAttributeValue>;
 }
+
+export type QueryItemsParams<K> = QueryItemsParamsBase<K> &
+  (
+    | {
+        /** @deprecated Use `keys` instead. */
+        keyName: string;
+        /** @deprecated Use `keys` instead. */
+        keyValue: NativeAttributeValue;
+        /** @deprecated Use `rangeConditions` instead. */
+        rangeCondition?: ConditionExpressionQueryArgs;
+        keys?: never;
+        rangeConditions?: never;
+        fuzzy?: never;
+      }
+    | {
+        /**
+         * Partition key attribute(s).
+         * Supports multi-attribute GSI partition keys. All are queried with equality.
+         */
+        keys: ReadonlyArray<KeyAttribute>;
+        /**
+         * Sort key condition(s).
+         * For multi-attribute GSI sort keys, provide conditions left-to-right.
+         * When fuzzy is true, all conditions must be simple equality conditions as the last condition will automatically use `begins_with` instead of equality.
+         */
+        rangeConditions?: ReadonlyArray<EqualsRangeCondition>;
+        /**
+         * When true, the last range condition uses `begins_with` instead of equality.
+         */
+        fuzzy: true;
+        keyName?: never;
+        keyValue?: never;
+        rangeCondition?: never;
+      }
+    | {
+        /**
+         * Partition key attribute(s).
+         * Supports multi-attribute GSI partition keys. All are queried with equality.
+         */
+        keys: ReadonlyArray<KeyAttribute>;
+        /**
+         * Sort key condition(s).
+         * For multi-attribute GSI sort keys, provide conditions left-to-right.
+         * All conditions except the last must be EqualsRangeCondition.
+         * The last may be an EqualsRangeCondition, BetweenRangeCondition, or OperatorRangeCondition.
+         */
+        rangeConditions?: readonly [...EqualsRangeCondition[], RangeCondition];
+        fuzzy?: false;
+        keyName?: never;
+        keyValue?: never;
+        rangeCondition?: never;
+      }
+  );
 
 /**
  * Query items from a table.
@@ -565,15 +626,54 @@ export function queryItems<
 export async function queryItems<
   T extends Record<string, NativeAttributeValue>,
 >(params: QueryItemsParams<keyof T>): Promise<T[]> {
+  const resolvedKeys: ReadonlyArray<KeyAttribute> =
+    'keys' in params && params.keys
+      ? params.keys
+      : [{ name: (params as any).keyName, value: (params as any).keyValue }];
+
+  let resolvedRangeConditions:
+    | ReadonlyArray<ConditionExpressionQueryArgs>
+    | undefined =
+    'rangeConditions' in params && params.rangeConditions
+      ? params.rangeConditions.map(toConditionExpressionQueryArgs)
+      : 'rangeCondition' in params && params.rangeCondition
+        ? [params.rangeCondition]
+        : undefined;
+
+  if (resolvedRangeConditions && resolvedRangeConditions.length > 1) {
+    const nonFinal = resolvedRangeConditions.slice(0, -1);
+    const invalidCondition = nonFinal.find((c) => c.operator !== 'Equal');
+    if (invalidCondition) {
+      throw new Error(
+        `Only the last range condition may use an inequality operator. "${invalidCondition.field}" uses "${invalidCondition.operator}" but is not the last condition.`,
+      );
+    }
+  }
+
+  if ('fuzzy' in params && params.fuzzy && resolvedRangeConditions?.length) {
+    const last = resolvedRangeConditions[resolvedRangeConditions.length - 1];
+    resolvedRangeConditions = [
+      ...resolvedRangeConditions.slice(0, -1),
+      { ...last, operator: 'BeginsWith' as const },
+    ];
+  }
+
+  const expressionAttributeNames: Record<string, string> = {};
+  const expressionAttributeValues: Record<string, NativeAttributeValue> = {};
+
+  const keyConditionParts: string[] = resolvedKeys.map((key, i) => {
+    const nameRef = `#key${i}`;
+    const valRef = `:key${i}`;
+    expressionAttributeNames[nameRef] = key.name;
+    expressionAttributeValues[valRef] = key.value;
+    return `${nameRef} = ${valRef}`;
+  });
+
   const queryInput: QueryCommandInput = {
     TableName: params.table,
-    KeyConditionExpression: `#a = :b`,
-    ExpressionAttributeNames: {
-      '#a': params.keyName,
-    },
-    ExpressionAttributeValues: {
-      ':b': params.keyValue,
-    },
+    KeyConditionExpression: keyConditionParts.join(' AND '),
+    ExpressionAttributeNames: expressionAttributeNames,
+    ExpressionAttributeValues: expressionAttributeValues,
   };
 
   if (params?.indexName) {
@@ -600,25 +700,26 @@ export async function queryItems<
     queryInput.ProjectionExpression = params.projectionExpression.join(',');
   }
 
-  const rangeData = buildConditionExpression(
-    params.rangeCondition ? [params.rangeCondition] : undefined,
-  );
-  if (rangeData?.attributeNames) {
-    queryInput.ExpressionAttributeNames = {
-      ...queryInput.ExpressionAttributeNames,
-      ...rangeData.attributeNames,
-    };
-  }
+  if (resolvedRangeConditions?.length) {
+    const rangeData = buildConditionExpression([...resolvedRangeConditions]);
 
-  if (rangeData?.attributeValues) {
-    queryInput.ExpressionAttributeValues = {
-      ...queryInput.ExpressionAttributeValues,
-      ...rangeData.attributeValues,
-    };
-  }
+    if (rangeData?.attributeNames) {
+      queryInput.ExpressionAttributeNames = {
+        ...queryInput.ExpressionAttributeNames,
+        ...rangeData.attributeNames,
+      };
+    }
 
-  if (rangeData?.conditionExpression) {
-    queryInput.KeyConditionExpression = `${queryInput.KeyConditionExpression} AND ${rangeData?.conditionExpression}`;
+    if (rangeData?.attributeValues) {
+      queryInput.ExpressionAttributeValues = {
+        ...queryInput.ExpressionAttributeValues,
+        ...rangeData.attributeValues,
+      };
+    }
+
+    if (rangeData?.conditionExpression) {
+      queryInput.KeyConditionExpression = `${queryInput.KeyConditionExpression} AND ${rangeData.conditionExpression}`;
+    }
   }
 
   const allRecords: T[] = [];
@@ -634,8 +735,10 @@ export async function queryItems<
   return allRecords;
 }
 
-export interface QueryRangeParams<K>
-  extends Omit<QueryItemsParams<K>, 'rangeCondition'> {
+export interface QueryRangeParams<K> extends Omit<
+  QueryItemsParams<K>,
+  'rangeCondition' | 'rangeConditions' | 'fuzzy'
+> {
   rangeKeyName: string;
   rangeKeyValue: NativeAttributeValue;
   /**
@@ -666,20 +769,21 @@ export function queryItemsRange<
 export async function queryItemsRange<
   T extends Record<string, NativeAttributeValue>,
 >(params: QueryRangeParams<keyof T>): Promise<T[]> {
-  const result = await queryItems<T>({
-    ...params,
+  const { rangeKeyName, rangeKeyValue, fuzzy, ...rest } = params;
+  return queryItems<T>({
+    ...rest,
     rangeCondition: {
-      operator: params.fuzzy ? 'BeginsWith' : 'Equal',
-      field: params.rangeKeyName,
-      value: params.rangeKeyValue,
+      operator: fuzzy ? 'BeginsWith' : 'Equal',
+      field: rangeKeyName,
+      value: rangeKeyValue,
     },
-  });
-
-  return result;
+  } as QueryItemsParams<keyof T>);
 }
 
-export interface QueryItemsRangeBetweenParams<K>
-  extends Omit<QueryItemsParams<K>, 'rangeCondition'> {
+export interface QueryItemsRangeBetweenParams<K> extends Omit<
+  QueryItemsParams<K>,
+  'rangeCondition' | 'rangeConditions'
+> {
   rangeKeyName: string;
   rangeKeyValueMin: NativeAttributeValue;
   rangeKeyValueMax: NativeAttributeValue;
@@ -706,17 +810,16 @@ export function queryItemsRangeBetween<
 export async function queryItemsRangeBetween<
   T extends Record<string, NativeAttributeValue>,
 >(params: QueryItemsRangeBetweenParams<keyof T>): Promise<T[]> {
-  const result = await queryItems<T>({
-    ...params,
+  const { rangeKeyName, rangeKeyValueMin, rangeKeyValueMax, ...rest } = params;
+  return queryItems<T>({
+    ...rest,
     rangeCondition: {
       operator: 'Between',
-      field: params.rangeKeyName,
-      value: params.rangeKeyValueMin,
-      betweenSecondValue: params.rangeKeyValueMax,
+      field: rangeKeyName,
+      value: rangeKeyValueMin,
+      betweenSecondValue: rangeKeyValueMax,
     },
-  });
-
-  return result;
+  } as QueryItemsParams<keyof T>);
 }
 
 export interface BatchPutItems<T extends Record<string, NativeAttributeValue>> {

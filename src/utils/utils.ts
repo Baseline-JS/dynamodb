@@ -34,6 +34,63 @@ export interface ConditionExpressionQueryArgs {
   betweenSecondValue?: NativeAttributeValue;
 }
 
+export interface KeyAttribute {
+  name: string;
+  value: NativeAttributeValue;
+}
+
+export interface EqualsRangeCondition {
+  name: string;
+  value: NativeAttributeValue;
+  valueMin?: never;
+  valueMax?: never;
+}
+
+export interface BetweenRangeCondition {
+  name: string;
+  valueMin: NativeAttributeValue;
+  valueMax: NativeAttributeValue;
+  value?: never;
+}
+
+export interface OperatorRangeCondition {
+  name: string;
+  operator: Exclude<OperatorQueryType, 'Equal' | 'NotEqual' | 'Between'>;
+  value: NativeAttributeValue;
+  valueMin?: never;
+  valueMax?: never;
+}
+
+export type RangeCondition =
+  | EqualsRangeCondition
+  | BetweenRangeCondition
+  | OperatorRangeCondition;
+
+export const toConditionExpressionQueryArgs = (
+  rangeCondition: RangeCondition,
+): ConditionExpressionQueryArgs => {
+  if ('valueMin' in rangeCondition && rangeCondition.valueMin !== undefined) {
+    return {
+      operator: 'Between',
+      field: rangeCondition.name,
+      value: rangeCondition.valueMin,
+      betweenSecondValue: rangeCondition.valueMax,
+    };
+  }
+  if ('operator' in rangeCondition && rangeCondition.operator !== undefined) {
+    return {
+      operator: rangeCondition.operator,
+      field: rangeCondition.name,
+      value: rangeCondition.value,
+    };
+  }
+  return {
+    operator: 'Equal',
+    field: rangeCondition.name,
+    value: rangeCondition.value,
+  };
+};
+
 export const sleep = (ms: number) =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
